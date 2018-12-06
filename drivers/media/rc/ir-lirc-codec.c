@@ -1,6 +1,7 @@
 /* ir-lirc-codec.c - rc-core to classic lirc interface bridge
  *
  * Copyright (C) 2010 by Jarod Wilson <jarod@redhat.com>
+ * Copyright (C) 2017 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -20,7 +21,7 @@
 #include <media/rc-core.h>
 #include "rc-core-priv.h"
 
-#define LIRCBUF_SIZE 256
+#define LIRCBUF_SIZE 1024
 
 /**
  * ir_lirc_decode() - Send raw IR data to lirc_dev to be relayed to the
@@ -289,14 +290,11 @@ static long ir_lirc_ioctl(struct file *filep, unsigned int cmd,
 		if (!dev->max_timeout)
 			return -ENOSYS;
 
-		/* Check for multiply overflow */
-		if (val > U32_MAX / 1000)
-			return -EINVAL;
-
 		tmp = val * 1000;
 
-		if (tmp < dev->min_timeout || tmp > dev->max_timeout)
-			return -EINVAL;
+		if (tmp < dev->min_timeout ||
+		    tmp > dev->max_timeout)
+				return -EINVAL;
 
 		dev->timeout = tmp;
 		break;
@@ -317,12 +315,31 @@ static long ir_lirc_ioctl(struct file *filep, unsigned int cmd,
 
 static int ir_lirc_open(void *data)
 {
-	return 0;
+
+	struct lirc_codec *lirc = data;
+	struct rc_dev *dev = lirc->dev;
+	int ret = 0;
+
+	mutex_lock(&dev->lock);
+	if (!dev->open_count++ && dev->open)
+		ret = dev->open(dev);
+	if (ret < 0)
+		dev->open_count--;
+	mutex_unlock(&dev->lock);
+
+	return ret;
 }
 
 static void ir_lirc_close(void *data)
 {
-	return;
+
+	struct lirc_codec *lirc = data;
+	struct rc_dev *dev = lirc->dev;
+
+	mutex_lock(&dev->lock);
+	if (!--dev->open_count && dev->close)
+		dev->close(dev);
+	mutex_unlock(&dev->lock);
 }
 
 static const struct file_operations lirc_fops = {
@@ -390,7 +407,7 @@ static int ir_lirc_register(struct rc_dev *dev)
 	drv->rbuf = rbuf;
 	drv->set_use_inc = &ir_lirc_open;
 	drv->set_use_dec = &ir_lirc_close;
-	drv->code_length = sizeof(struct ir_raw_event) * 8;
+	drv->code_length = sizeof(int) * 8;
 	drv->fops = &lirc_fops;
 	drv->dev = &dev->dev;
 	drv->rdev = dev;
@@ -407,6 +424,7 @@ static int ir_lirc_register(struct rc_dev *dev)
 	return 0;
 
 lirc_register_failed:
+	lirc_buffer_free(rbuf);
 rbuf_init_failed:
 	kfree(rbuf);
 rbuf_alloc_failed:
@@ -421,6 +439,7 @@ static int ir_lirc_unregister(struct rc_dev *dev)
 
 	lirc_unregister_driver(lirc->drv->minor);
 	lirc_buffer_free(lirc->drv->rbuf);
+	kfree(lirc->drv->rbuf);
 	kfree(lirc->drv);
 
 	return 0;
