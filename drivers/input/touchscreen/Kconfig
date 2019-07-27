@@ -1188,7 +1188,6 @@ config TOUCHSCREEN_TD4310
 	  module will be called td4310_ts.
 
 source "drivers/input/touchscreen/gt9xx/Kconfig"
-source "drivers/input/touchscreen/focaltech_touch/Kconfig"
 
 config TOUCHSCREEN_FT5346
 	bool "FOCALTECH touchpanel FT5346 series"
